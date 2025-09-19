@@ -18,7 +18,7 @@ For a stretch criteria, keep the option to tail the firehose rather than hammeri
 
 ### Obstacles
 
-On the happy path, our obstacle is to try to get Constellation to do a full backfill.
+On the happy path, our main obstacle is to try to get Constellation to do a full backfill.
 
 On the unhappy path we're forking Constellation to do a full backfill (and maybe be more efficient by only backfilling records we care about).
 
