@@ -2,6 +2,7 @@ use reqwest::{get, Url};
 use tokio;
 use serde_json;
 use serde::{Deserialize};
+use rusqlite::Connection;
 
 // Right now this sets up a basic constellation client and tries to query for listblock records
 // The problem is that all the bigger anti-AI lists of note appear to be older than Constellation is
@@ -55,6 +56,8 @@ impl ConstelClient {
                 .text()
                 .await?;
 
+            println!("{:?}", body);
+
             let parsed: ConstelResult = serde_json::from_str(&body)?;
 
             Ok(parsed)
@@ -63,12 +66,42 @@ impl ConstelClient {
 
 #[tokio::main]
 async fn main() {
-        setup_db();
-        get_subscribers_from_constel();
+    // Initialize DB (creates file/table if missing). This is idempotent.
+    setup_db().await;
+    // Continue to fetch subscribers
+    get_subscribers_from_constel().await;
 }
 
 async fn setup_db() {
+    // Use a blocking connection inside spawn_blocking so we don't block the async runtime.
+    let db_path = "blocklists.db".to_string();
 
+    let res = tokio::task::spawn_blocking(move || -> rusqlite::Result<()> {
+        // Open (or create) the database file in the current working directory.
+        let conn = Connection::open(&db_path)?;
+
+        // Create a table named `subscriptions` holding exactly the requested triples:
+        // (did, date, blocklist) - all TEXT and NOT NULL. This statement is idempotent.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS subscriptions (
+                did TEXT NOT NULL,
+                date TEXT NOT NULL,
+                blocklist TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        Ok(())
+    })
+    .await;
+
+    match res {
+        Ok(Ok(())) => {
+            // success
+        }
+        Ok(Err(e)) => eprintln!("DB initialization error: {}", e),
+        Err(e) => eprintln!("Failed to join DB init task: {}", e),
+    }
 }
 
 async fn get_subscribers_from_constel() {
