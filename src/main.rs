@@ -63,6 +63,15 @@ impl ConstelClient {
 
 #[tokio::main]
 async fn main() {
+        setup_db();
+        get_subscribers_from_constel();
+}
+
+async fn setup_db() {
+
+}
+
+async fn get_subscribers_from_constel() {
         let blocklists: Vec<&str> = include_str!("./anti-ai-lists.txt")
                 .lines()
             .map(str::trim)
@@ -99,7 +108,7 @@ async fn main() {
                         break;
                     }
                 } // end match
-				println!("{:?}", did_vec)
+                println!("{:?}", did_vec)
             } // end loop
         } // end for
 }
