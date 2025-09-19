@@ -4,9 +4,9 @@ use serde_json;
 use serde::{Deserialize};
 
 // Right now this sets up a basic constellation client and tries to query for listblock records
-// The problem is that all the anti-AI lists of note appear to be older than Constellation is
+// The problem is that all the bigger anti-AI lists of note appear to be older than Constellation is
 // This means the many of their records are not in Constellation
-// Going to pause development and work on Constellation backfill (or on forking it, if needed)
+// Going to work on pushing the records we CAN get to an account, and then work on constellation backfill.
 #[derive(Debug, Deserialize)]
 struct ConstelResult {
     total: u64,
