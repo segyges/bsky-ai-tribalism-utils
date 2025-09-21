@@ -64,14 +64,6 @@ impl ConstelClient {
         }
 }
 
-#[tokio::main]
-async fn main() {
-    // Initialize DB (creates file/table if missing). This is idempotent.
-    setup_db().await;
-    // Continue to fetch subscribers
-    get_subscribers_from_constel().await;
-}
-
 async fn setup_db() {
     // Use a blocking connection inside spawn_blocking so we don't block the async runtime.
     let db_path = "blocklists.db".to_string();
@@ -85,7 +77,7 @@ async fn setup_db() {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS subscriptions (
                 did TEXT NOT NULL,
-                date TEXT NOT NULL,
+                unix_time INTEGER NOT NULL,
                 blocklist TEXT NOT NULL
             )",
             [],
@@ -104,17 +96,28 @@ async fn setup_db() {
     }
 }
 
-async fn get_subscribers_from_constel() {
+#[tokio::main]
+async fn main() {
+    // Initialize DB (creates file/table if missing). This is idempotent.
+    setup_db().await;
+    // Continue to fetch subscribers
+    let subscriptions = get_subscribers_from_constel().await;
+}
+
+async fn get_subscribers_from_constel() -> Vec<(String, String)> {
+        // Load list of blocklists from file
         let blocklists: Vec<&str> = include_str!("./anti-ai-lists.txt")
                 .lines()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .collect();
+        // Init constellation client
         let cli = ConstelClient { root_uri: "https://constellation.microcosm.blue/".to_string() };
+        // For holding the DIDs pf the subscribed accounts
+        let mut subscriptions: Vec<(String, String)> = vec![];
 
         for did in &blocklists {
             let mut cursor: Option<String> = None;
-            let mut did_vec: Vec<String> = vec![];
 
             loop {
                 let res = cli.get_links(
@@ -127,7 +130,7 @@ async fn get_subscribers_from_constel() {
                 match res {
                     Ok(result) => {
                         for rec in result.linking_records {
-                            did_vec.push(rec.did);
+                            subscriptions.push((rec.did, did.to_string()));
                         }
 
                         if let Some(next) = result.cursor {
@@ -141,7 +144,8 @@ async fn get_subscribers_from_constel() {
                         break;
                     }
                 } // end match
-                println!("{:?}", did_vec)
+                println!("{:?}", subscriptions)
             } // end loop
         } // end for
+        subscriptions
 }
