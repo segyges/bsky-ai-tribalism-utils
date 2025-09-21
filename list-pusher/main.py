@@ -79,47 +79,67 @@ def get_user_dids(filename="processed_haters.json") -> List[str]:
         return []
 
 
-def log_backoff(details):
-    print(
-        f"Retrying ({details['tries']}/5) after exception: {details['exception']} "
-        f"(waiting {details['wait']:0.1f}s)"
-    )
+def create_list_item_with_retry(client, user_did, list_uri, max_tries=5):
+    """
+    Create a list item with smart retry logic:
+    - First retry: wait until rate limit reset + 1 second
+    - Subsequent retries: exponential backoff starting at 60s
+    """
     
-def smart_backoff(details):
-    # First retry and we have rate limit info? Wait until reset + 1 second
-    if details['tries'] == 1 and hasattr(details.get('exception'), 'headers'):
-        reset_time = details['exception'].headers.get('ratelimit-reset')
-        if reset_time:
-            current_time = time.time()
-            wait_time = int(reset_time) - current_time + 1
-            if wait_time > 0 and wait_time < 3600:  # reasonable bounds
-                print(f"Using rate limit reset time: {reset_time} (waiting {wait_time:.1f}s until reset + 1s)")
-                return wait_time
-            else:
-                print(f"Rate limit reset time unreasonable ({wait_time:.1f}s), falling back to exponential")
-        else:
-            print("No ratelimit-reset header found, falling back to exponential")
-    
-    # Fall back to exponential: 60 * (2 ^ (tries - 1))
-    exp_wait = 60 * (2 ** (details['tries'] - 1))
-    print(f"Using exponential backoff: {exp_wait:.1f}s (try #{details['tries']})")
-    return exp_wait
-@backoff.on_exception(
-    smart_backoff,  # Use custom function instead of backoff.expo
-    Exception,
-    max_tries=5,
-    on_backoff=log_backoff,
-)
-def create_list_item(client, user_did, list_uri):
-    return client.app.bsky.graph.listitem.create(
-        repo=client.me.did,
-        record={
-            'subject': user_did,
-            'list': list_uri,
-            'createdAt': client.get_current_time_iso(),
-        }
-    )
+    for attempt in range(max_tries):
+        try:
+            return client.app.bsky.graph.listitem.create(
+                repo=client.me.did,
+                record={
+                    'subject': user_did,
+                    'list': list_uri,
+                    'createdAt': client.get_current_time_iso(),
+                }
+            )
+        except Exception as e:
+            if attempt == max_tries - 1:  # Last attempt
+                print(f"Final attempt failed after {max_tries} tries: {e}")
+                raise
+            
+            # Determine wait time
+            wait_time = calculate_wait_time(e, attempt + 1)
+            
+            print(f"Attempt {attempt + 1}/{max_tries} failed: {e}")
+            print(f"Waiting {wait_time:.1f}s before retry...")
+            
+            time.sleep(wait_time)
 
+def calculate_wait_time(exception, attempt_number):
+    """Calculate how long to wait based on the exception and attempt number"""
+    
+    # First retry: try to use rate limit reset time
+    if attempt_number == 1 and hasattr(exception, 'headers'):
+        reset_time = getattr(exception.headers, 'get', lambda x: None)('ratelimit-reset')
+        remaining = getattr(exception.headers, 'get', lambda x: None)('ratelimit-remaining')
+        
+        if reset_time:
+            try:
+                current_time = time.time()
+                wait_until_reset = int(reset_time) - current_time + 1
+                
+                if 0 < wait_until_reset < 3600:  # Reasonable bounds (1 hour max)
+                    print(f"Rate limit exceeded (remaining: {remaining}), waiting until reset + 1s")
+                    return wait_until_reset
+                else:
+                    print(f"Rate limit reset time unreasonable ({wait_until_reset:.1f}s), using exponential backoff")
+            except (ValueError, TypeError):
+                print("Invalid rate limit reset time, using exponential backoff")
+        else:
+            print("No rate limit reset header found, using exponential backoff")
+    
+    # Exponential backoff: 60 * (2 ^ (attempt - 1))
+    exponential_wait = 60 * (2 ** (attempt_number - 1))
+    print(f"Using exponential backoff for attempt #{attempt_number}")
+    return exponential_wait
+
+# Replace your decorated function with this:
+def create_list_item(client, user_did, list_uri):
+    return create_list_item_with_retry(client, user_did, list_uri)
 
 def main():
     print("Bluesky Blocklist Manager")
