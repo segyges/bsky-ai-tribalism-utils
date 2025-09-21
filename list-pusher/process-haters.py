@@ -1,5 +1,4 @@
 import json
-from collections import defaultdict
 
 ## This is only going to be used one single time to process a dump from clearsky, if we are at all lucky, and is preserved in this repo for the sole purpose of reproducibility in case something goes horribly wrong later.
 
