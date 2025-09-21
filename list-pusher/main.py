@@ -9,7 +9,59 @@ import getpass
 import json
 from typing import List
 from atproto import Client
+from atproto_client.models.app.bsky.graph.get_list import Params as GetListParams
+import time
+import backoff
+from datetime import datetime
 
+def fetch_blocklist_dids(client: Client, at_uri: str) -> List[str]:
+    """
+    Fetch all DIDs from a Bluesky blocklist given its AT-URI.
+    
+    Args:
+        client: Already authenticated Bluesky client
+        at_uri: The AT-URI of the blocklist (e.g., "at://did:plc:s45hbf5dqdkjpwuuq4djo6l2/app.bsky.graph.list/3lzefe5k2432n")
+    
+    Returns:
+        List of DIDs as strings
+    """
+    all_dids = []
+    cursor = None
+    
+    while True:
+        # Create params object for the API call
+        if cursor:
+            params = GetListParams(
+                list=at_uri,
+                cursor=cursor
+            )
+        else:
+            params = GetListParams(
+                list=at_uri,
+            )
+        
+        # Fetch a page of list members
+        response = client.app.bsky.graph.get_list(params)
+        
+        # Extract DIDs from this page
+        if hasattr(response, 'items') and response.items:
+            page_dids = []
+            for member in response.items:
+                subject = getattr(member, 'subject', None)
+                if subject:
+                    did = getattr(subject, 'did', None)
+                    if did:
+                        page_dids.append(did)
+            
+            all_dids.extend(page_dids)
+        
+        # Check if there are more pages
+        if hasattr(response, 'cursor') and response.cursor:
+            cursor = response.cursor
+        else:
+            break
+    
+    return all_dids
 
 def get_user_dids(filename="processed_haters.json") -> List[str]:
     """
@@ -25,6 +77,48 @@ def get_user_dids(filename="processed_haters.json") -> List[str]:
     except json.JSONDecodeError:
         print(f"Error: Invalid JSON in file: {filename}")
         return []
+
+
+def log_backoff(details):
+    print(
+        f"Retrying ({details['tries']}/5) after exception: {details['exception']} "
+        f"(waiting {details['wait']:0.1f}s)"
+    )
+    
+def smart_backoff(details):
+    # First retry and we have rate limit info? Wait until reset + 1 second
+    if details['tries'] == 1 and hasattr(details.get('exception'), 'headers'):
+        reset_time = details['exception'].headers.get('ratelimit-reset')
+        if reset_time:
+            current_time = time.time()
+            wait_time = int(reset_time) - current_time + 1
+            if wait_time > 0 and wait_time < 3600:  # reasonable bounds
+                print(f"Using rate limit reset time: {reset_time} (waiting {wait_time:.1f}s until reset + 1s)")
+                return wait_time
+            else:
+                print(f"Rate limit reset time unreasonable ({wait_time:.1f}s), falling back to exponential")
+        else:
+            print("No ratelimit-reset header found, falling back to exponential")
+    
+    # Fall back to exponential: 60 * (2 ^ (tries - 1))
+    exp_wait = 60 * (2 ** (details['tries'] - 1))
+    print(f"Using exponential backoff: {exp_wait:.1f}s (try #{details['tries']})")
+    return exp_wait
+@backoff.on_exception(
+    smart_backoff,  # Use custom function instead of backoff.expo
+    Exception,
+    max_tries=5,
+    on_backoff=log_backoff,
+)
+def create_list_item(client, user_did, list_uri):
+    return client.app.bsky.graph.listitem.create(
+        repo=client.me.did,
+        record={
+            'subject': user_did,
+            'list': list_uri,
+            'createdAt': client.get_current_time_iso(),
+        }
+    )
 
 
 def main():
@@ -52,6 +146,19 @@ def main():
     
     print(f"\nFound {len(user_dids)} DIDs to add to the list.")
     
+    print("\nConnecting to Bluesky...")
+    client = Client()
+    client.login(handle, app_password)
+    print("✓ Successfully authenticated")
+    
+    already_listed = fetch_blocklist_dids(client, list_uri)
+    
+    print(f"List already contains {len(already_listed)} DIDs")
+    
+    user_dids = list(set(user_dids) - set(already_listed))
+    
+    print(f"DIDs to be added to list: {len(user_dids)}")
+    
     # Confirm before proceeding
     confirm = input(f"Add {len(user_dids)} users to list {list_uri}? (y/N): ").strip().lower()
     if confirm != 'y':
@@ -60,10 +167,7 @@ def main():
     
     try:
         # Connect to Bluesky
-        print("\nConnecting to Bluesky...")
-        client = Client()
-        client.login(handle, app_password)
-        print("✓ Successfully authenticated")
+
         
         # Add users to the list
         successful = 0
@@ -72,15 +176,7 @@ def main():
         for i, user_did in enumerate(user_dids, 1):
             try:
                 print(f"Adding user {i}/{len(user_dids)}: {user_did}")
-                
-                client.app.bsky.graph.listitem.create(
-                    repo=client.me.did,
-                    record={
-                        'subject': user_did,
-                        'list': list_uri,
-                        'createdAt': client.get_current_time_iso(),
-                    }
-                )
+                create_list_item(client, user_did, list_uri)
                 successful += 1
                 print(f"✓ Added successfully")
                 
