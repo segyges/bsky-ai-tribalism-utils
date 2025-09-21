@@ -1,6 +1,8 @@
 import asyncio
 import websockets
 import json
+import os
+import csv
 
 uri = "wss://jetstream2.us-east.bsky.network/subscribe?wantedCollections=app.bsky.graph.listblock"
 
@@ -25,11 +27,16 @@ async def listen_to_websocket(bl):
         # One hopes this is the happy path
         list_blocked = message['commit']['record']['subject']
         if list_blocked not in bl:
-            print("Not in blocklists: {list_blocked}")
+            print(f"Not in blocklists: {list_blocked}")
             continue
         print(f'Correct type of blocklist subscription! List: {list_blocked}')
-        blocker = message['did']
-        time = message['commit']['record']['createdAt']
+        blocker = message.get('did')
+        time = message['commit']['record'].get('createdAt')
+        # append to CSV (blocker,list_blocked,time)
+        try:
+          await append_to_csv(blocker, list_blocked, time)
+        except Exception as e:
+          print(f"Failed to write CSV row: {e}")
         
         
       except websockets.ConnectionClosed as e:
@@ -65,6 +72,39 @@ def load_blocklist(path=None):
     # Return empty list if file isn't present; caller can decide how to handle
     return []
   return items
+
+
+def _get_csv_path(path=None):
+  if path:
+    return path
+  here = os.path.dirname(__file__)
+  return os.path.join(here, 'blocks.csv')
+
+
+def _write_csv_row(path, row):
+  # ensure directory exists (should be current folder)
+  dirn = os.path.dirname(path)
+  if dirn and not os.path.exists(dirn):
+    os.makedirs(dirn, exist_ok=True)
+  write_header = not os.path.exists(path) or os.path.getsize(path) == 0
+  with open(path, 'a', newline='', encoding='utf-8') as f:
+    w = csv.writer(f)
+    if write_header:
+      w.writerow(['blocker', 'list_blocked', 'time'])
+    w.writerow(row)
+
+
+async def append_to_csv(blocker, list_blocked, time, path=None):
+  """Append a row to CSV in a thread to avoid blocking the event loop."""
+  csv_path = _get_csv_path(path)
+  row = [blocker or '', list_blocked or '', time or '']
+  # run blocking IO in a separate thread
+  try:
+    await asyncio.to_thread(_write_csv_row, csv_path, row)
+  except AttributeError:
+    # asyncio.to_thread only exists in Python 3.9+; fallback to run_in_executor
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _write_csv_row, csv_path, row)
 
 
 if __name__ == '__main__':
