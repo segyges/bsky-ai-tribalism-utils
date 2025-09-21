@@ -176,6 +176,18 @@ wheels = [
 ]
 
 [[package]]
+name = "flatten-json"
+version = "0.1.14"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0f/14/e9b5e4a8dd7edccc9d0791c4ed2180e50b00ab4c19b07081308814dd4e68/flatten_json-0.1.14.tar.gz", hash = "sha256:4008b1bd81743e6fcdc29ddbb640f5c1589376116e0c8f36cb4a0003d41fe102", size = 7806, upload-time = "2023-10-27T17:20:54.562Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/63/b5/99f20a19b839e04fffab924be192681b797b40bcf83abdfa508371c6273c/flatten_json-0.1.14-py3-none-any.whl", hash = "sha256:75e455dbbb5be2431546024039cac094a8ed1dfedcf36ab1e7c9d01459fa410c", size = 7962, upload-time = "2023-10-27T17:20:40.455Z" },
+]
+
+[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -327,10 +339,23 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "atproto" },
+    { name = "flatten-json" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "atproto", specifier = ">=0.0.62" }]
+requires-dist = [
+    { name = "atproto", specifier = ">=0.0.62" },
+    { name = "flatten-json", specifier = ">=0.1.14" },
+]
+
+[[package]]
+name = "six"
+version = "1.17.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
 
 [[package]]
 name = "sniffio"

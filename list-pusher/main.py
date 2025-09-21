@@ -78,14 +78,13 @@ def get_user_dids(filename="processed_haters.json") -> List[str]:
         print(f"Error: Invalid JSON in file: {filename}")
         return []
 
-
 def create_list_item_with_retry(client, user_did, list_uri, max_tries=5):
     """
     Create a list item with smart retry logic:
     - First retry: wait until rate limit reset + 1 second
     - Subsequent retries: exponential backoff starting at 60s
     """
-    
+   
     for attempt in range(max_tries):
         try:
             return client.app.bsky.graph.listitem.create(
@@ -100,41 +99,123 @@ def create_list_item_with_retry(client, user_did, list_uri, max_tries=5):
             if attempt == max_tries - 1:  # Last attempt
                 print(f"Final attempt failed after {max_tries} tries: {e}")
                 raise
+           
+            # Debug: print exception details to understand structure
+            print(f"Exception type: {type(e)}")
+            print(f"Exception attributes: {dir(e)}")
             
             # Determine wait time
             wait_time = calculate_wait_time(e, attempt + 1)
-            
+           
             print(f"Attempt {attempt + 1}/{max_tries} failed: {e}")
             print(f"Waiting {wait_time:.1f}s before retry...")
-            
+           
             time.sleep(wait_time)
+
+def extract_headers_from_exception(exception):
+    """
+    Try multiple ways to extract headers from the exception
+    Returns headers dict or None if not found
+    """
+    # Method 1: Direct headers attribute
+    if hasattr(exception, 'headers'):
+        headers = exception.headers
+        if isinstance(headers, dict):
+            return headers
+        elif hasattr(headers, 'get'):  # headers object with get method
+            return headers
+    
+    # Method 2: Check if it's an HTTP exception with response
+    if hasattr(exception, 'response') and hasattr(exception.response, 'headers'):
+        return exception.response.headers
+    
+    # Method 3: Check for args containing response info
+    if hasattr(exception, 'args') and exception.args:
+        for arg in exception.args:
+            if isinstance(arg, dict) and 'headers' in arg:
+                return arg['headers']
+            elif hasattr(arg, 'headers'):
+                return arg.headers
+    
+    # Method 4: Parse headers from string representation
+    exception_str = str(exception)
+    if 'ratelimit-reset' in exception_str.lower():
+        headers = parse_headers_from_string(exception_str)
+        if headers:
+            return headers
+    
+    return None
+
+def parse_headers_from_string(text):
+    """
+    Attempt to extract rate limit headers from exception string
+    """
+    import re
+    
+    headers = {}
+    
+    # Look for patterns like "ratelimit-reset: 1234567890" or "ratelimit-reset': '1234567890'"
+    patterns = [
+        r"['\"]?ratelimit-reset['\"]?\s*:\s*['\"]?(\d+)['\"]?",
+        r"['\"]?ratelimit-remaining['\"]?\s*:\s*['\"]?(\d+)['\"]?",
+    ]
+    
+    for pattern in patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        if matches:
+            header_name = 'ratelimit-reset' if 'reset' in pattern else 'ratelimit-remaining'
+            headers[header_name] = matches[0]
+    
+    return headers if headers else None
 
 def calculate_wait_time(exception, attempt_number):
     """Calculate how long to wait based on the exception and attempt number"""
-    
+   
     # First retry: try to use rate limit reset time
-    if attempt_number == 1 and hasattr(exception, 'headers'):
-        reset_time = getattr(exception.headers, 'get', lambda x: None)('ratelimit-reset')
-        remaining = getattr(exception.headers, 'get', lambda x: None)('ratelimit-remaining')
+    if attempt_number == 1:
+        headers = extract_headers_from_exception(exception)
         
-        if reset_time:
-            try:
-                current_time = time.time()
-                wait_until_reset = int(reset_time) - current_time + 1
-                
-                if 0 < wait_until_reset < 3600:  # Reasonable bounds (1 hour max)
-                    print(f"Rate limit exceeded (remaining: {remaining}), waiting until reset + 1s")
-                    return wait_until_reset
-                else:
-                    print(f"Rate limit reset time unreasonable ({wait_until_reset:.1f}s), using exponential backoff")
-            except (ValueError, TypeError):
-                print("Invalid rate limit reset time, using exponential backoff")
+        if headers:
+            print(f"Found headers: {headers}")
+            
+            # Try different header name variations
+            reset_time = None
+            remaining = None
+            
+            for key in headers:
+                if isinstance(key, str):
+                    key_lower = key.lower()
+                    if 'reset' in key_lower and 'rate' in key_lower:
+                        reset_time = headers[key]
+                    elif 'remaining' in key_lower and 'rate' in key_lower:
+                        remaining = headers[key]
+            
+            # Also try exact matches
+            if not reset_time:
+                reset_time = headers.get('ratelimit-reset') or headers.get('RateLimit-Reset')
+            if not remaining:
+                remaining = headers.get('ratelimit-remaining') or headers.get('RateLimit-Remaining')
+            
+            print(f"Reset time: {reset_time}, Remaining: {remaining}")
+            
+            if reset_time:
+                try:
+                    current_time = time.time()
+                    wait_until_reset = int(reset_time) - current_time + 1
+                   
+                    if 0 < wait_until_reset < 172800:  # Reasonable bounds (2 days max)
+                        print(f"Rate limit exceeded (remaining: {remaining}), waiting until reset + 1s")
+                        return wait_until_reset
+                    else:
+                        print(f"Rate limit reset time unreasonable ({wait_until_reset:.1f}s), using exponential backoff")
+                except (ValueError, TypeError) as e:
+                    print(f"Invalid rate limit reset time '{reset_time}': {e}, using exponential backoff")
         else:
-            print("No rate limit reset header found, using exponential backoff")
-    
+            print("No rate limit headers found in exception, using exponential backoff")
+   
     # Exponential backoff: 60 * (2 ^ (attempt - 1))
     exponential_wait = 60 * (2 ** (attempt_number - 1))
-    print(f"Using exponential backoff for attempt #{attempt_number}")
+    print(f"Using exponential backoff for attempt #{attempt_number}: {exponential_wait}s")
     return exponential_wait
 
 # Replace your decorated function with this:
