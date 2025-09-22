@@ -14,9 +14,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"io"
-	"net/http"
-	"net/url"
 
 	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/api/bsky"
@@ -92,7 +89,6 @@ func (m *BlueskyBlocklistManager) getCredentials() error {
 }
 
 // authenticate logs in to Bluesky using indigo's xrpc client
-// authenticate logs in to Bluesky using indigo's xrpc client
 func (m *BlueskyBlocklistManager) authenticate() error {
     // Create xrpc client for bsky.social
     xrpcClient := &xrpc.Client{
@@ -151,70 +147,39 @@ func (m *BlueskyBlocklistManager) getUserDIDs(filename string) ([]string, error)
 }
 
 
-// fetchBlocklistDIDs fetches all DIDs from an existing blocklist using indigo.
+// fetchBlocklistDIDs fetches all DIDs from an existing blocklist using the authenticated PDS
 func (m *BlueskyBlocklistManager) fetchBlocklistDIDs(listURI string) ([]string, error) {
-	// Scoped types
-	type Subject struct {
-		DID string `json:"did"`
-	}
+    var dids []string
+    cursor := ""
+    limit := int64(100) // Maximum items per request
 
-	type Item struct {
-		Subject Subject `json:"subject"`
-	}
+    for {
+        ctx := context.Background()
+        
+        // Use the authenticated GraphGetList method from the indigo library
+        resp, err := bsky.GraphGetList(ctx, m.client, cursor, limit, listURI)
+        if err != nil {
+            return nil, fmt.Errorf("failed to fetch list: %w", err)
+        }
 
-	type Response struct {
-		Cursor string `json:"cursor"`
-		Items  []Item `json:"items"`
-	}
+        // Extract DIDs from the response
+        for _, item := range resp.Items {
+            if item.Subject != nil && item.Subject.Did != "" {
+                dids = append(dids, item.Subject.Did)
+            }
+        }
 
-	baseURL := "https://public.api.bsky.app/xrpc/app.bsky.graph.getList"
-	var dids []string
-	cursor := ""
+        // Stop if there's no next page
+        if resp.Cursor == nil || *resp.Cursor == "" {
+            break
+        }
+        cursor = *resp.Cursor
+        
+        // Add a small delay to avoid rate limiting
+        time.Sleep(100 * time.Millisecond)
+    }
 
-	for {
-		// Build request URL
-		params := url.Values{}
-		params.Add("list", listURI)
-		if cursor != "" {
-			params.Add("cursor", cursor)
-		}
-		reqURL := baseURL + "?" + params.Encode()
-
-		// Make the GET request
-		resp, err := http.Get(reqURL)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("non-200 response: %d", resp.StatusCode)
-		}
-
-		// Parse the response
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, err
-		}
-
-		var parsed Response
-		if err := json.Unmarshal(body, &parsed); err != nil {
-			return nil, err
-		}
-
-		// Extract DIDs
-		for _, item := range parsed.Items {
-			dids = append(dids, item.Subject.DID)
-		}
-
-		// Stop if there's no next page
-		if parsed.Cursor == "" {
-			break
-		}
-		cursor = parsed.Cursor
-	}
-
-	return dids, nil
+    return dids, nil
 }
 
 
@@ -264,46 +229,89 @@ func (m *BlueskyBlocklistManager) calculateWaitTime(err error, attempt int) time
 	return exponentialWait
 }
 
+// refreshAuth refreshes the authentication token
+func (m *BlueskyBlocklistManager) refreshAuth() error {
+    xrpcClient := m.client.(*xrpc.Client)
+    if xrpcClient.Auth == nil || xrpcClient.Auth.RefreshJwt == "" {
+        return fmt.Errorf("no refresh token available")
+    }
+
+    // Create a temporary client for refresh
+    refreshClient := &xrpc.Client{
+        Host: xrpcClient.Host,
+        Auth: &xrpc.AuthInfo{
+            AccessJwt: xrpcClient.Auth.RefreshJwt,
+        },
+    }
+
+    ctx := context.Background()
+    refreshOutput, err := atproto.ServerRefreshSession(ctx, refreshClient)
+    if err != nil {
+        // If refresh fails, try full reauthentication
+        fmt.Println("Refresh token failed, attempting full reauthentication...")
+        return m.authenticate()
+    }
+
+    // Update the main client with new tokens
+    xrpcClient.Auth.AccessJwt = refreshOutput.AccessJwt
+    xrpcClient.Auth.RefreshJwt = refreshOutput.RefreshJwt
+    xrpcClient.Auth.Handle = refreshOutput.Handle
+    xrpcClient.Auth.Did = refreshOutput.Did
+
+    fmt.Println("✓ Authentication token refreshed")
+    return nil
+}
+
 // createListItemWithRetry adds a user to the list with retry logic using indigo
 func (m *BlueskyBlocklistManager) createListItemWithRetry(userDID, listURI string) error {
-	ctx := context.Background()
+    ctx := context.Background()
 
-	for attempt := 1; attempt <= m.retryConfig.MaxRetries; attempt++ {
-		// Create the list item using the proper bsky type
-		record := &bsky.GraphListitem{
-			Subject:   userDID,
-			List:      listURI,
-			CreatedAt: time.Now().UTC().Format(time.RFC3339),
-		}
+    for attempt := 1; attempt <= m.retryConfig.MaxRetries; attempt++ {
+        // Create the list item using the proper bsky type
+        record := &bsky.GraphListitem{
+            Subject:   userDID,
+            List:      listURI,
+            CreatedAt: time.Now().UTC().Format(time.RFC3339),
+        }
 
-		// Get the authenticated DID from the client
-		xrpcClient := m.client.(*xrpc.Client)
-		if xrpcClient.Auth == nil {
-			return fmt.Errorf("not authenticated")
-		}
+        // Get the authenticated DID from the client
+        xrpcClient := m.client.(*xrpc.Client)
+        if xrpcClient.Auth == nil {
+            return fmt.Errorf("not authenticated")
+        }
 
-		createInput := &atproto.RepoCreateRecord_Input{
-			Repo:       xrpcClient.Auth.Did,
-			Collection: "app.bsky.graph.listitem",
-			Record:     &util.LexiconTypeDecoder{Val: record}, // Wrap in LexiconTypeDecoder
-		}
+        createInput := &atproto.RepoCreateRecord_Input{
+            Repo:       xrpcClient.Auth.Did,
+            Collection: "app.bsky.graph.listitem",
+            Record:     &util.LexiconTypeDecoder{Val: record}, // Wrap in LexiconTypeDecoder
+        }
 
-		_, err := atproto.RepoCreateRecord(ctx, m.client, createInput)
-		if err == nil {
-			return nil // Success
-		}
+        _, err := atproto.RepoCreateRecord(ctx, m.client, createInput)
+        if err == nil {
+            return nil // Success
+        }
 
-		if attempt == m.retryConfig.MaxRetries {
-			return fmt.Errorf("final attempt failed after %d tries: %w", m.retryConfig.MaxRetries, err)
-		}
+        // Check if token expired and refresh
+        if strings.Contains(err.Error(), "ExpiredToken") || strings.Contains(err.Error(), "Token has expired") {
+            fmt.Println("Token expired, attempting to refresh...")
+            if refreshErr := m.refreshAuth(); refreshErr != nil {
+                return fmt.Errorf("failed to refresh token: %w", refreshErr)
+            }
+            // Retry immediately with fresh token instead of waiting
+            continue
+        }
 
-		waitTime := m.calculateWaitTime(err, attempt)
-		fmt.Printf("Attempt %d/%d failed: %v\n", attempt, m.retryConfig.MaxRetries, err)
-		fmt.Printf("Waiting %v before retry...\n", waitTime)
-		time.Sleep(waitTime)
-	}
+        if attempt == m.retryConfig.MaxRetries {
+            return fmt.Errorf("final attempt failed after %d tries: %w", m.retryConfig.MaxRetries, err)
+        }
 
-	return fmt.Errorf("maximum retries exceeded")
+        waitTime := m.calculateWaitTime(err, attempt)
+        fmt.Printf("Attempt %d/%d failed: %v\n", attempt, m.retryConfig.MaxRetries, err)
+        fmt.Printf("Waiting %v before retry...\n", waitTime)
+        time.Sleep(waitTime)
+    }
+
+    return fmt.Errorf("maximum retries exceeded")
 }
 
 // removeDuplicates removes duplicate DIDs from a slice
