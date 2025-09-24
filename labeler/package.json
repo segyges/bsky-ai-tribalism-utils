@@ -1,0 +1,19 @@
+{
+  "name": "antiantiai-labeler",
+  "version": "1.0.0",
+  "description": "Labeler for @antiantiai.verysane.ai on bluesky",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/segyges/bsky-ai-tribalism-utils.git"
+  },
+  "author": "SE Gyges",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/segyges/bsky-ai-tribalism-utils/issues"
+  },
+  "homepage": "https://github.com/segyges/bsky-ai-tribalism-utils#readme"
+}
