@@ -151,7 +151,7 @@ func (m *BlueskyBlocklistManager) getUserDIDs(filename string) ([]string, error)
 func (m *BlueskyBlocklistManager) fetchBlocklistDIDs(listURI string) ([]string, error) {
     var dids []string
     cursor := ""
-    limit := int64(1000) // Maximum items per request
+    limit := int64(100) // Maximum items per request
 
     for {
         ctx := context.Background()
