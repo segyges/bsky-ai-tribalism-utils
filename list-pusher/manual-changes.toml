@@ -1,29 +1,29 @@
 [Removes]
 identifiers = [
-	'@balisane.bsky.social',
-	'@myriadfold.art',
-	'@visnul.bsky.social',
-	'@vr.eevee.center',
-	'@witchdaddy.bsky.social',
-	'@matreyoo.bsky.social',
-	'@rhondawolfson.bsky.social',
-	'@farmwisdom.bsky.social',
-	'@04t.es'
+	'balisane.bsky.social',
+	'myriadfold.art',
+	'visnul.bsky.social',
+	'vr.eevee.center',
+	'witchdaddy.bsky.social',
+	'matreyoo.bsky.social',
+	'rhondawolfson.bsky.social',
+	'farmwisdom.bsky.social',
+	'04t.es'
 ]
 
 [Adds]
 identifiers = [
-	'@sherbetdreams.bsky.social',
-	'@dfyurg.bsky.social',
-	'@robnobody.bsky.social',
-	'@fultzywultzyart.bsky.social',
-	'@fioko.tv',
-	'@sith-art.bsky.social',
-	'@untenablewhale.bsky.social',
-	'@artvelasco.bsky.social',
-	'@itsdoug.ca',
-	'@sonicakuroi.bsky.social',
-	'@karjedon.bsky.social',
-	'@herssian.bsky.social',
-	'@toadsanime.lostincult.co.uk'
+	'sherbetdreams.bsky.social',
+	'dfyurg.bsky.social',
+	'robnobody.bsky.social',
+	'fultzywultzyart.bsky.social',
+	'fioko.tv',
+	'sith-art.bsky.social',
+	'untenablewhale.bsky.social',
+	'artvelasco.bsky.social',
+	'itsdoug.ca',
+	'sonicakuroi.bsky.social',
+	'karjedon.bsky.social',
+	'herssian.bsky.social',
+	'toadsanime.lostincult.co.uk'
 ]
