@@ -12,14 +12,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/lex/util"
 	"github.com/bluesky-social/indigo/xrpc"
-	"golang.org/x/term"
 )
 
 // Config holds our application configuration
@@ -55,34 +53,25 @@ func NewBlueskyBlocklistManager() *BlueskyBlocklistManager {
 	}
 }
 
-// getCredentials prompts user for credentials
-func (m *BlueskyBlocklistManager) getCredentials() error {
-	reader := bufio.NewReader(os.Stdin)
+// loadConfig loads configuration from environment variables
+func (m *BlueskyBlocklistManager) loadConfig() error {
+	m.config.Handle = os.Getenv("BLUESKY_HANDLE")
+	m.config.AppPassword = os.Getenv("BLUESKY_APP_PASSWORD")
+	m.config.ListURI = os.Getenv("BLUESKY_LIST_URI")
 
-	fmt.Print("Enter your Bluesky handle (e.g., username.bsky.social): ")
-	handle, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to read handle: %w", err)
+	// Validate required fields
+	if m.config.Handle == "" {
+		return fmt.Errorf("BLUESKY_HANDLE environment variable is required")
 	}
-	m.config.Handle = strings.TrimSpace(handle)
-
-	fmt.Print("Enter your app password: ")
-	passwordBytes, err := term.ReadPassword(int(syscall.Stdin))
-	if err != nil {
-		return fmt.Errorf("failed to read password: %w", err)
+	if m.config.AppPassword == "" {
+		return fmt.Errorf("BLUESKY_APP_PASSWORD environment variable is required")
 	}
-	fmt.Println() // New line after password input
-	m.config.AppPassword = strings.TrimSpace(string(passwordBytes))
-
-	fmt.Print("Enter the list URI or AT-URI (starts with at://): ")
-	listURI, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to read list URI: %w", err)
+	if m.config.ListURI == "" {
+		return fmt.Errorf("BLUESKY_LIST_URI environment variable is required")
 	}
-	m.config.ListURI = strings.TrimSpace(listURI)
 
 	if !strings.HasPrefix(m.config.ListURI, "at://") {
-		return fmt.Errorf("list identifier should be an AT-URI starting with 'at://'")
+		return fmt.Errorf("BLUESKY_LIST_URI should be an AT-URI starting with 'at://'")
 	}
 
 	return nil
@@ -90,40 +79,40 @@ func (m *BlueskyBlocklistManager) getCredentials() error {
 
 // authenticate logs in to Bluesky using indigo's xrpc client
 func (m *BlueskyBlocklistManager) authenticate() error {
-    // Create xrpc client for bsky.social
-    xrpcClient := &xrpc.Client{
-        Host: "https://pds.futur.blue",
-    }
-    
-    fmt.Printf("DEBUG: Connecting to PDS at: %s\n", xrpcClient.Host)
+	// Create xrpc client for bsky.social
+	xrpcClient := &xrpc.Client{
+		Host: "https://pds.futur.blue",
+	}
 
-    // Perform authentication using com.atproto.server.createSession
-    auth := &atproto.ServerCreateSession_Input{
-        Identifier: m.config.Handle,
-        Password:   m.config.AppPassword,
-    }
-    
-    fmt.Printf("DEBUG: Authenticating with handle: %s\n", m.config.Handle)
+	fmt.Printf("DEBUG: Connecting to PDS at: %s\n", xrpcClient.Host)
 
-    ctx := context.Background()
-    session, err := atproto.ServerCreateSession(ctx, xrpcClient, auth)
-    if err != nil {
-        return fmt.Errorf("failed to create session: %w", err)
-    }
+	// Perform authentication using com.atproto.server.createSession
+	auth := &atproto.ServerCreateSession_Input{
+		Identifier: m.config.Handle,
+		Password:   m.config.AppPassword,
+	}
 
-    // Set authentication token for future requests
-    xrpcClient.Auth = &xrpc.AuthInfo{
-        AccessJwt:  session.AccessJwt,
-        RefreshJwt: session.RefreshJwt,
-        Handle:     session.Handle,
-        Did:        session.Did,
-    }
-    
-    fmt.Printf("DEBUG: Successfully authenticated. User DID: %s\n", session.Did)
+	fmt.Printf("DEBUG: Authenticating with handle: %s\n", m.config.Handle)
 
-    // Use the xrpc client as a LexClient
-    m.client = xrpcClient
-    return nil
+	ctx := context.Background()
+	session, err := atproto.ServerCreateSession(ctx, xrpcClient, auth)
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+
+	// Set authentication token for future requests
+	xrpcClient.Auth = &xrpc.AuthInfo{
+		AccessJwt:  session.AccessJwt,
+		RefreshJwt: session.RefreshJwt,
+		Handle:     session.Handle,
+		Did:        session.Did,
+	}
+
+	fmt.Printf("DEBUG: Successfully authenticated. User DID: %s\n", session.Did)
+
+	// Use the xrpc client as a LexClient
+	m.client = xrpcClient
+	return nil
 }
 
 // getUserDIDs reads DIDs from the JSON file
@@ -146,63 +135,61 @@ func (m *BlueskyBlocklistManager) getUserDIDs(filename string) ([]string, error)
 	return dids, nil
 }
 
-
 // fetchBlocklistDIDs fetches all DIDs from an existing blocklist using the authenticated PDS
 func (m *BlueskyBlocklistManager) fetchBlocklistDIDs(listURI string) ([]string, error) {
-    var dids []string
-    cursor := ""
-    limit := int64(100) // Maximum items per request
+	var dids []string
+	cursor := ""
+	limit := int64(100) // Maximum items per request
 
-    for {
-        ctx := context.Background()
-        
-        // Use the authenticated GraphGetList method from the indigo library
-        resp, err := bsky.GraphGetList(ctx, m.client, cursor, limit, listURI)
-        if err != nil {
-            return nil, fmt.Errorf("failed to fetch list: %w", err)
-        }
+	for {
+		ctx := context.Background()
 
-        // Extract DIDs from the response
-        for _, item := range resp.Items {
-            if item.Subject != nil && item.Subject.Did != "" {
-                dids = append(dids, item.Subject.Did)
-            }
-        }
+		// Use the authenticated GraphGetList method from the indigo library
+		resp, err := bsky.GraphGetList(ctx, m.client, cursor, limit, listURI)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch list: %w", err)
+		}
 
-        // Stop if there's no next page
-        if resp.Cursor == nil || *resp.Cursor == "" {
-            break
-        }
-        cursor = *resp.Cursor
-        
-        // Add a small delay to avoid rate limiting
-        time.Sleep(100 * time.Millisecond)
-    }
+		// Extract DIDs from the response
+		for _, item := range resp.Items {
+			if item.Subject != nil && item.Subject.Did != "" {
+				dids = append(dids, item.Subject.Did)
+			}
+		}
 
-    return dids, nil
+		// Stop if there's no next page
+		if resp.Cursor == nil || *resp.Cursor == "" {
+			break
+		}
+		cursor = *resp.Cursor
+
+		// Add a small delay to avoid rate limiting
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	return dids, nil
 }
-
 
 // extractRateLimitHeaders extracts rate limit info from error
 func (m *BlueskyBlocklistManager) extractRateLimitHeaders(err error) (resetTime int64, remaining int) {
 	errStr := err.Error()
-	
+
 	// Try to extract rate limit reset time from error message
 	resetPattern := regexp.MustCompile(`ratelimit-reset['"']?\s*:\s*['"]?(\d+)['"]?`)
 	remainingPattern := regexp.MustCompile(`ratelimit-remaining['"']?\s*:\s*['"]?(\d+)['"]?`)
-	
+
 	if matches := resetPattern.FindStringSubmatch(errStr); len(matches) > 1 {
 		if rt, parseErr := strconv.ParseInt(matches[1], 10, 64); parseErr == nil {
 			resetTime = rt
 		}
 	}
-	
+
 	if matches := remainingPattern.FindStringSubmatch(errStr); len(matches) > 1 {
 		if rem, parseErr := strconv.Atoi(matches[1]); parseErr == nil {
 			remaining = rem
 		}
 	}
-	
+
 	return resetTime, remaining
 }
 
@@ -211,18 +198,18 @@ func (m *BlueskyBlocklistManager) calculateWaitTime(err error, attempt int) time
 	// First retry: try to use rate limit reset time
 	if attempt == 1 {
 		resetTime, remaining := m.extractRateLimitHeaders(err)
-		
+
 		if resetTime > 0 {
 			currentTime := time.Now().Unix()
 			waitUntilReset := time.Duration(resetTime-currentTime+1) * time.Second
-			
+
 			if waitUntilReset > 0 && waitUntilReset < 48*time.Hour {
 				fmt.Printf("Rate limit exceeded (remaining: %d), waiting until reset + 1s\n", remaining)
 				return waitUntilReset
 			}
 		}
 	}
-	
+
 	// Exponential backoff: 60 * (2 ^ (attempt - 1))
 	exponentialWait := time.Duration(60*math.Pow(2, float64(attempt-1))) * time.Second
 	fmt.Printf("Using exponential backoff for attempt #%d: %v\n", attempt, exponentialWait)
@@ -231,87 +218,87 @@ func (m *BlueskyBlocklistManager) calculateWaitTime(err error, attempt int) time
 
 // refreshAuth refreshes the authentication token
 func (m *BlueskyBlocklistManager) refreshAuth() error {
-    xrpcClient := m.client.(*xrpc.Client)
-    if xrpcClient.Auth == nil || xrpcClient.Auth.RefreshJwt == "" {
-        return fmt.Errorf("no refresh token available")
-    }
+	xrpcClient := m.client.(*xrpc.Client)
+	if xrpcClient.Auth == nil || xrpcClient.Auth.RefreshJwt == "" {
+		return fmt.Errorf("no refresh token available")
+	}
 
-    // Create a temporary client for refresh
-    refreshClient := &xrpc.Client{
-        Host: xrpcClient.Host,
-        Auth: &xrpc.AuthInfo{
-            AccessJwt: xrpcClient.Auth.RefreshJwt,
-        },
-    }
+	// Create a temporary client for refresh
+	refreshClient := &xrpc.Client{
+		Host: xrpcClient.Host,
+		Auth: &xrpc.AuthInfo{
+			AccessJwt: xrpcClient.Auth.RefreshJwt,
+		},
+	}
 
-    ctx := context.Background()
-    refreshOutput, err := atproto.ServerRefreshSession(ctx, refreshClient)
-    if err != nil {
-        // If refresh fails, try full reauthentication
-        fmt.Println("Refresh token failed, attempting full reauthentication...")
-        return m.authenticate()
-    }
+	ctx := context.Background()
+	refreshOutput, err := atproto.ServerRefreshSession(ctx, refreshClient)
+	if err != nil {
+		// If refresh fails, try full reauthentication
+		fmt.Println("Refresh token failed, attempting full reauthentication...")
+		return m.authenticate()
+	}
 
-    // Update the main client with new tokens
-    xrpcClient.Auth.AccessJwt = refreshOutput.AccessJwt
-    xrpcClient.Auth.RefreshJwt = refreshOutput.RefreshJwt
-    xrpcClient.Auth.Handle = refreshOutput.Handle
-    xrpcClient.Auth.Did = refreshOutput.Did
+	// Update the main client with new tokens
+	xrpcClient.Auth.AccessJwt = refreshOutput.AccessJwt
+	xrpcClient.Auth.RefreshJwt = refreshOutput.RefreshJwt
+	xrpcClient.Auth.Handle = refreshOutput.Handle
+	xrpcClient.Auth.Did = refreshOutput.Did
 
-    fmt.Println("✓ Authentication token refreshed")
-    return nil
+	fmt.Println("✓ Authentication token refreshed")
+	return nil
 }
 
 // createListItemWithRetry adds a user to the list with retry logic using indigo
 func (m *BlueskyBlocklistManager) createListItemWithRetry(userDID, listURI string) error {
-    ctx := context.Background()
+	ctx := context.Background()
 
-    for attempt := 1; attempt <= m.retryConfig.MaxRetries; attempt++ {
-        // Create the list item using the proper bsky type
-        record := &bsky.GraphListitem{
-            Subject:   userDID,
-            List:      listURI,
-            CreatedAt: time.Now().UTC().Format(time.RFC3339),
-        }
+	for attempt := 1; attempt <= m.retryConfig.MaxRetries; attempt++ {
+		// Create the list item using the proper bsky type
+		record := &bsky.GraphListitem{
+			Subject:   userDID,
+			List:      listURI,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		}
 
-        // Get the authenticated DID from the client
-        xrpcClient := m.client.(*xrpc.Client)
-        if xrpcClient.Auth == nil {
-            return fmt.Errorf("not authenticated")
-        }
+		// Get the authenticated DID from the client
+		xrpcClient := m.client.(*xrpc.Client)
+		if xrpcClient.Auth == nil {
+			return fmt.Errorf("not authenticated")
+		}
 
-        createInput := &atproto.RepoCreateRecord_Input{
-            Repo:       xrpcClient.Auth.Did,
-            Collection: "app.bsky.graph.listitem",
-            Record:     &util.LexiconTypeDecoder{Val: record}, // Wrap in LexiconTypeDecoder
-        }
+		createInput := &atproto.RepoCreateRecord_Input{
+			Repo:       xrpcClient.Auth.Did,
+			Collection: "app.bsky.graph.listitem",
+			Record:     &util.LexiconTypeDecoder{Val: record}, // Wrap in LexiconTypeDecoder
+		}
 
-        _, err := atproto.RepoCreateRecord(ctx, m.client, createInput)
-        if err == nil {
-            return nil // Success
-        }
+		_, err := atproto.RepoCreateRecord(ctx, m.client, createInput)
+		if err == nil {
+			return nil // Success
+		}
 
-        // Check if token expired and refresh
-        if strings.Contains(err.Error(), "ExpiredToken") || strings.Contains(err.Error(), "Token has expired") {
-            fmt.Println("Token expired, attempting to refresh...")
-            if refreshErr := m.refreshAuth(); refreshErr != nil {
-                return fmt.Errorf("failed to refresh token: %w", refreshErr)
-            }
-            // Retry immediately with fresh token instead of waiting
-            continue
-        }
+		// Check if token expired and refresh
+		if strings.Contains(err.Error(), "ExpiredToken") || strings.Contains(err.Error(), "Token has expired") {
+			fmt.Println("Token expired, attempting to refresh...")
+			if refreshErr := m.refreshAuth(); refreshErr != nil {
+				return fmt.Errorf("failed to refresh token: %w", refreshErr)
+			}
+			// Retry immediately with fresh token instead of waiting
+			continue
+		}
 
-        if attempt == m.retryConfig.MaxRetries {
-            return fmt.Errorf("final attempt failed after %d tries: %w", m.retryConfig.MaxRetries, err)
-        }
+		if attempt == m.retryConfig.MaxRetries {
+			return fmt.Errorf("final attempt failed after %d tries: %w", m.retryConfig.MaxRetries, err)
+		}
 
-        waitTime := m.calculateWaitTime(err, attempt)
-        fmt.Printf("Attempt %d/%d failed: %v\n", attempt, m.retryConfig.MaxRetries, err)
-        fmt.Printf("Waiting %v before retry...\n", waitTime)
-        time.Sleep(waitTime)
-    }
+		waitTime := m.calculateWaitTime(err, attempt)
+		fmt.Printf("Attempt %d/%d failed: %v\n", attempt, m.retryConfig.MaxRetries, err)
+		fmt.Printf("Waiting %v before retry...\n", waitTime)
+		time.Sleep(waitTime)
+	}
 
-    return fmt.Errorf("maximum retries exceeded")
+	return fmt.Errorf("maximum retries exceeded")
 }
 
 // removeDuplicates removes duplicate DIDs from a slice
@@ -351,10 +338,13 @@ func (m *BlueskyBlocklistManager) run() error {
 	fmt.Println("Bluesky Blocklist Manager")
 	fmt.Println("=" + strings.Repeat("=", 24))
 
-	// Get credentials
-	if err := m.getCredentials(); err != nil {
-		return fmt.Errorf("failed to get credentials: %w", err)
+	// Load config from environment
+	if err := m.loadConfig(); err != nil {
+		return fmt.Errorf("failed to load configuration: %w", err)
 	}
+
+	fmt.Printf("Using handle: %s\n", m.config.Handle)
+	fmt.Printf("Using list: %s\n", m.config.ListURI)
 
 	// Get DIDs to add
 	userDIDs, err := m.getUserDIDs("processed_haters.json")

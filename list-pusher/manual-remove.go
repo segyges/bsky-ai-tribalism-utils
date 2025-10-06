@@ -7,14 +7,12 @@ import (
 	"log"
 	"os"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/xrpc"
-	"golang.org/x/term"
 )
 
 // Config holds our application configuration
@@ -45,34 +43,25 @@ func NewBlueskyListRemover() *BlueskyListRemover {
 	return &BlueskyListRemover{}
 }
 
-// getCredentials prompts user for credentials
-func (r *BlueskyListRemover) getCredentials() error {
-	reader := bufio.NewReader(os.Stdin)
+// loadConfig loads configuration from environment variables
+func (r *BlueskyListRemover) loadConfig() error {
+	r.config.Handle = os.Getenv("BLUESKY_HANDLE")
+	r.config.AppPassword = os.Getenv("BLUESKY_APP_PASSWORD")
+	r.config.ListURI = os.Getenv("BLUESKY_LIST_URI")
 
-	fmt.Print("Enter your Bluesky handle (e.g., username.bsky.social): ")
-	handle, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to read handle: %w", err)
+	// Validate required fields
+	if r.config.Handle == "" {
+		return fmt.Errorf("BLUESKY_HANDLE environment variable is required")
 	}
-	r.config.Handle = strings.TrimSpace(handle)
-
-	fmt.Print("Enter your app password: ")
-	passwordBytes, err := term.ReadPassword(int(syscall.Stdin))
-	if err != nil {
-		return fmt.Errorf("failed to read password: %w", err)
+	if r.config.AppPassword == "" {
+		return fmt.Errorf("BLUESKY_APP_PASSWORD environment variable is required")
 	}
-	fmt.Println() // New line after password input
-	r.config.AppPassword = strings.TrimSpace(string(passwordBytes))
-
-	fmt.Print("Enter the list URI or AT-URI (starts with at://): ")
-	listURI, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to read list URI: %w", err)
+	if r.config.ListURI == "" {
+		return fmt.Errorf("BLUESKY_LIST_URI environment variable is required")
 	}
-	r.config.ListURI = strings.TrimSpace(listURI)
 
 	if !strings.HasPrefix(r.config.ListURI, "at://") {
-		return fmt.Errorf("list identifier should be an AT-URI starting with 'at://'")
+		return fmt.Errorf("BLUESKY_LIST_URI should be an AT-URI starting with 'at://'")
 	}
 
 	return nil
@@ -116,7 +105,7 @@ func (r *BlueskyListRemover) authenticate() error {
 // readRemovalsFromTOML reads the Removes section from the TOML file
 func (r *BlueskyListRemover) readRemovalsFromTOML(filename string) ([]string, error) {
 	var config TOMLConfig
-	
+
 	if _, err := toml.DecodeFile(filename, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse TOML file %s: %w", filename, err)
 	}
@@ -131,7 +120,7 @@ func (r *BlueskyListRemover) readRemovalsFromTOML(filename string) ([]string, er
 // resolveHandleToDID resolves a handle to a DID using com.atproto.identity.resolveHandle
 func (r *BlueskyListRemover) resolveHandleToDID(handle string) (string, error) {
 	ctx := context.Background()
-	
+
 	resp, err := atproto.IdentityResolveHandle(ctx, r.client, handle)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve handle %s: %w", handle, err)
@@ -210,10 +199,13 @@ func (r *BlueskyListRemover) run() error {
 	fmt.Println("Bluesky List Remover")
 	fmt.Println("=" + strings.Repeat("=", 19))
 
-	// Get credentials
-	if err := r.getCredentials(); err != nil {
-		return fmt.Errorf("failed to get credentials: %w", err)
+	// Load config from environment
+	if err := r.loadConfig(); err != nil {
+		return fmt.Errorf("failed to load configuration: %w", err)
 	}
+
+	fmt.Printf("Using handle: %s\n", r.config.Handle)
+	fmt.Printf("Using list: %s\n", r.config.ListURI)
 
 	// Read handles from TOML file
 	handles, err := r.readRemovalsFromTOML("manual-changes.toml")
